@@ -8,6 +8,8 @@ import cors from 'cors';
 import { clerkClient, clerkMiddleware, verifyToken } from '@clerk/express';
 import webhookRouter from './routes/webhook.js';
 import userRouter from './routes/userRoutes.js';
+import { getClerkUserIdFromCookies } from './middleware/clerkAuth.js';
+import { httpMiddleware } from './middleware/httpAuth.js';
 
 const app = express();
 const prisma = new PrismaClient();
@@ -15,8 +17,13 @@ const prisma = new PrismaClient();
 app.use(express.json());
 app.use('/api', webhookRouter);
 app.use(clerkMiddleware());
-app.use(cors());
-app.use('/users', userRouter);
+app.use(
+  cors({
+    origin: 'http://localhost:5173',
+    credentials: true,
+  })
+);
+app.use('/users', httpMiddleware, userRouter);
 
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -32,6 +39,7 @@ interface PrivateMessagePayload {
   fromUsername: string;
   toUsername: string;
   message: string;
+  tempId: string;
 }
 
 async function findOrCreateChat(payload: PrivateMessagePayload) {
@@ -72,22 +80,8 @@ async function findOrCreateChat(payload: PrivateMessagePayload) {
 io.use(async (socket, next) => {
   try {
     const cookieHeader = socket.handshake.headers.cookie;
-    if (!cookieHeader) return next(new Error('No Cookies Found'));
-
-    const cookies = cookie.parse(cookieHeader);
-    const sessionToken = cookies['__session'];
-
-    if (!sessionToken) return next(new Error('Missing Clerk session token'));
-    if (!process.env.CLERK_JWT_KEY) return console.log('key not found');
-
-    const jwtKey = process.env.CLERK_JWT_KEY?.replace(/\\n/g, '\n');
-
-    const session = await verifyToken(sessionToken, {
-      jwtKey: jwtKey,
-      authorizedParties: ['http://localhost:5173'],
-    });
-
-    socket.user = session.sub;
+    const userId = await getClerkUserIdFromCookies(cookieHeader);
+    socket.userId = userId;
     next();
   } catch (e) {
     next(new Error('Authentication error'));
@@ -96,8 +90,7 @@ io.use(async (socket, next) => {
 
 io.on('connection', async (socket) => {
   console.log('a user connected');
-
-  const clerkUser = await clerkClient.users.getUser(socket.user);
+  const clerkUser = await clerkClient.users.getUser(socket.userId);
   console.log(clerkUser.username);
 
   if (clerkUser.username) {
@@ -130,13 +123,14 @@ io.on('connection', async (socket) => {
     console.log('online Users', onlineUsers);
 
     const messageData = {
+      id: createmsg.id,
       text: createmsg.text,
       chatId: createmsg.chatId,
-      sender: {
-        id: sender.id,
-        username: sender.username,
-      },
+      senderId: sender.id,
+      senderUsername: sender.username,
+      reciverUsername: payload.toUsername,
       createdAt: createmsg.createdAt,
+      tempId: payload.tempId,
     };
 
     const recipientSocketId = onlineUsers.get(payload.toUsername);
@@ -144,7 +138,7 @@ io.on('connection', async (socket) => {
       io.to(recipientSocketId).emit('message', messageData);
     }
 
-    socket.emit('message', messageData);
+    socket.emit('message_sent', messageData);
   });
 
   socket.on('disconnect', () => {
