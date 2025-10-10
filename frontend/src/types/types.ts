@@ -17,7 +17,13 @@ export interface userType {
 
 export interface chatType {
   id: number;
+  name: string;
   isGroup: boolean;
   members: userType[];
   messages: messageType[];
+}
+
+export interface ThemeContextType {
+  theme: 'light' | 'dark';
+  toggleTheme: () => void;
 }

@@ -1,24 +1,17 @@
 import { useEffect, useState } from 'react';
 import { socket } from '../socket';
 import axios from 'axios';
-import type { messageType, userType } from '../types';
+import type { messageType } from '../types/types';
 import { useUser } from '@clerk/clerk-react';
 import { useRecoilState } from 'recoil';
-import {
-  messagesAtom,
-  myChatsAtom,
-  selectedUserAtom,
-  usersAtom,
-} from '../atoms';
+import { myChatsAtom, selectedChatAtom } from '../atoms';
 
 const Chat = () => {
   const { user } = useUser();
   const [isConnected, setIsConnected] = useState(socket.connected);
   const [text, setText] = useState<string>('');
 
-  const [messages, setMessages] = useRecoilState(messagesAtom);
-  const [users, setUsers] = useRecoilState(usersAtom);
-  const [selectedUser, setSelectedUser] = useRecoilState(selectedUserAtom);
+  const [selectedChat, setSelectedChat] = useRecoilState(selectedChatAtom);
   const [chats, setChats] = useRecoilState(myChatsAtom);
 
   useEffect(() => {
@@ -28,60 +21,60 @@ const Chat = () => {
     const handleDisconnect = () => setIsConnected(false);
     if (!user) return;
 
-    const fetchUsers = async () => {
-      const response = await axios.get('http://localhost:3000/users/allUsers', {
-        withCredentials: true,
-      });
-      const allUsers: userType[] = response.data.users;
-      const filteredUsers = allUsers.filter(
-        (usr: userType) => usr.username !== user.username
-      );
-      setUsers(filteredUsers);
-    };
-    fetchUsers();
+    // const fetchUsers = async () => {
+    //   const response = await axios.get('http://localhost:3000/users/allUsers', {
+    //     withCredentials: true,
+    //   });
+    //   const allUsers: userType[] = response.data.users;
+    //   const filteredUsers = allUsers.filter(
+    //     (usr: userType) => usr.username !== user.username
+    //   );
+    //   setUsers(filteredUsers);
+    // };
+    // fetchUsers();
 
     const fetchChats = async () => {
       const response = await axios.get('http://localhost:3000/users/allChats', {
         withCredentials: true,
       });
       setChats(response.data.chats);
+      console.log(response.data.chats);
     };
 
     fetchChats();
 
     const handleMessage = (msg: messageType) => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: msg.id,
-          text: msg.text,
-          chatId: msg.chatId,
-          senderId: msg.senderId,
-          senderUsername: msg.senderUsername,
-          reciverUsername: msg.reciverUsername,
-          createdAt: msg.createdAt,
-          tempId: msg.tempId,
-          status: 'sent',
-        },
-      ]);
-      console.log(messages);
+      setSelectedChat((prev) => {
+        if (!prev) return prev;
+        if (prev.id === parseInt(msg.chatId)) {
+          const exists = prev.messages.some(
+            (m) => m.id === msg.id || m.tempId === msg.tempId
+          );
+
+          if (exists) return prev;
+
+          return {
+            ...prev,
+            messages: [...prev.messages, msg],
+          };
+        }
+        return prev;
+      });
     };
 
     const handleMessageSent = (msg: messageType) => {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.tempId == msg.tempId
-            ? {
-                ...m,
-                id: msg.id,
-                chatId: msg.chatId,
-                senderId: msg.senderId,
-                createdAt: msg.createdAt,
-                status: 'sent',
-              }
-            : m
-        )
-      );
+      setSelectedChat((prev) => {
+        if (!prev || prev.id !== parseInt(msg.chatId)) return prev;
+
+        return {
+          ...prev,
+          messages: prev.messages.map((m) =>
+            m.tempId === msg.tempId
+              ? { ...m, id: msg.id, status: 'sent', createdAt: msg.createdAt }
+              : m
+          ),
+        };
+      });
     };
 
     socket.on('connect', handleConnect);
@@ -98,30 +91,45 @@ const Chat = () => {
   }, []);
 
   const sendMessage = () => {
-    if (text.trim() === '' || !selectedUser) return;
+    if (text.trim() === '' || !selectedChat) return;
 
     const tempId = Math.random().toString(36).substring(2, 10);
 
     if (!user) return;
+    const reciverUsername = selectedChat.members.filter(
+      (m) => m.username !== user.username
+    );
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: '',
-        text,
-        chatId: '',
-        senderId: '',
-        senderUsername: 'You',
-        reciverUsername: selectedUser.username,
-        createdAt: '',
+    console.log('reciver Username ..... ', reciverUsername);
+    // this will only work for one -to - one chats
+    const newMsg: messageType = {
+      id: '',
+      text,
+      chatId: selectedChat.id + '',
+      senderId: user.id,
+      senderUsername: 'You',
+      reciverUsername: reciverUsername[0].username,
+      tempId,
+      status: 'sending',
+      createdAt: new Date().toISOString(),
+    };
+
+    {
+      setSelectedChat({
+        ...selectedChat,
+        messages: [...selectedChat.messages, newMsg],
+      });
+    }
+    if (selectedChat.isGroup) {
+      socket.emit('group_message', {
+        message: text,
+        chatId: selectedChat.id,
         tempId,
-        status: 'sending',
-      },
-    ]);
-
+      });
+    }
     socket.emit('private_message', {
       message: text,
-      toUsername: selectedUser.username,
+      toUsername: reciverUsername[0].username,
       tempId,
     });
 
@@ -137,49 +145,54 @@ const Chat = () => {
         <strong>{isConnected ? '🟢 Connected' : '🔴 Disconnected'}</strong>
       </p>
 
-      {users &&
-        users.map((u) => {
-          return (
-            <div key={u.username}>
-              <button
-                className="bg-black text-white rounded-lg p-4 mb-2 cursor-pointer"
-                onClick={() => setSelectedUser(u)}
-              >
-                {u.username}
-              </button>
-            </div>
-          );
-        })}
-
       <div>
         <h1>Chats</h1>
         {chats.length === 0 && <p>No chats found</p>}
         {chats &&
           chats.map((chat) => (
-            <div key={chat.id}>
-              <h2>{chat.id || 'Unnamed Chat'}</h2>
-
-              <p>Members: {chat.members.map((m) => m.username).join(', ')}</p>
-              <p>Messages: {chat.messages.length}</p>
+            <div key={chat.id} className="m-2 p-2">
+              <button
+                className="text-white bg-cyan-500 p-2 m-2"
+                onClick={() => {
+                  setSelectedChat(chat);
+                }}
+              >
+                {!chat.isGroup
+                  ? chat.members
+                      .filter((m) => m.username !== user?.username)
+                      .map((m) => m.username)
+                  : chat.name}
+              </button>
             </div>
           ))}
       </div>
 
       <div className="text-white">
-        <h3>Recived messages</h3>
+        <h3>Messages</h3>
         <ul>
-          {messages &&
-            messages.map((msg, i) => (
-              <li key={i}>
-                {msg.senderUsername} : {msg.text}
-              </li>
-            ))}
+          {selectedChat &&
+            selectedChat.messages.map((msg) => {
+              const sender = selectedChat.members.find(
+                (m) => m.id === Number(msg.senderId)
+              );
+
+              const senderName =
+                sender?.username === user?.username
+                  ? 'You'
+                  : sender?.username || 'You';
+
+              return (
+                <li key={msg.id || msg.tempId} className="my-1">
+                  <strong>{senderName}:</strong> {msg.text}
+                </li>
+              );
+            })}
         </ul>
       </div>
 
       <div className="text-white font-bold">
-        <h3>selected user</h3>
-        <div className="text-blue-500">{selectedUser?.username}</div>
+        <h3>selected Chat</h3>
+        <div className="text-blue-500">{selectedChat?.id}</div>
       </div>
 
       <div>
@@ -190,7 +203,7 @@ const Chat = () => {
           placeholder="type a msg..."
         ></input>
         <button
-          disabled={!selectedUser}
+          disabled={!selectedChat}
           className="bg-blue-600 p-2 m-2 text-white font-semibold cursor-pointer"
           onClick={sendMessage}
         >

@@ -5,7 +5,7 @@ import cookie from 'cookie';
 import { Server } from 'socket.io';
 import { PrismaClient } from '@prisma/client';
 import cors from 'cors';
-import { clerkClient, clerkMiddleware, verifyToken } from '@clerk/express';
+import { clerkClient, clerkMiddleware } from '@clerk/express';
 import webhookRouter from './routes/webhook.js';
 import userRouter from './routes/userRoutes.js';
 import { getClerkUserIdFromCookies } from './middleware/clerkAuth.js';
@@ -71,56 +71,107 @@ io.use(async (socket, next) => {
     }
 });
 io.on('connection', async (socket) => {
-    console.log('a user connected');
-    const clerkUser = await clerkClient.users.getUser(socket.userId);
-    console.log(clerkUser.username);
-    if (clerkUser.username) {
-        onlineUsers.set(clerkUser.username, socket.id);
-        console.log('✅ Auto-registered:', clerkUser.username);
+    try {
+        console.log('a user connected');
+        const clerkUser = await clerkClient.users.getUser(socket.userId);
+        console.log(clerkUser.username);
+        if (clerkUser.username) {
+            onlineUsers.set(clerkUser.username, socket.id);
+            console.log('✅ Auto-registered:', clerkUser.username);
+        }
+        socket.on('private_message', async (payload) => {
+            if (!clerkUser)
+                return;
+            payload.fromUsername = clerkUser.username + '';
+            console.log(payload);
+            const existingChat = await findOrCreateChat(payload);
+            const sender = await prisma.user.findFirst({
+                where: {
+                    username: payload.fromUsername,
+                },
+            });
+            if (!sender)
+                return new Error('sender not found');
+            const createmsg = await prisma.message.create({
+                data: {
+                    text: payload.message,
+                    chatId: existingChat.id,
+                    senderId: sender.id,
+                },
+            });
+            console.log('online Users', onlineUsers);
+            const messageData = {
+                id: createmsg.id,
+                text: createmsg.text,
+                chatId: createmsg.chatId,
+                senderId: sender.id,
+                senderUsername: sender.username,
+                reciverUsername: payload.toUsername,
+                createdAt: createmsg.createdAt,
+                tempId: payload.tempId,
+            };
+            const recipientSocketId = onlineUsers.get(payload.toUsername);
+            if (recipientSocketId) {
+                io.to(recipientSocketId).emit('message', messageData);
+            }
+            socket.emit('message_sent', messageData);
+        });
+        socket.on('group_message', async (payload) => {
+            try {
+                if (!clerkUser)
+                    return;
+                payload.fromUsername = clerkUser.username + '';
+                const chat = await prisma.chat.findFirst({
+                    where: { id: payload.chatId },
+                    include: { members: true },
+                });
+                if (!chat)
+                    return new Error('Chat not found');
+                const sender = await prisma.user.findFirst({
+                    where: { username: payload.fromUsername },
+                });
+                if (!sender)
+                    return new Error('Sender not found');
+                const createmsg = await prisma.message.create({
+                    data: {
+                        text: payload.message,
+                        chatId: chat.id,
+                        senderId: sender.id,
+                    },
+                });
+                const messageData = {
+                    id: createmsg.id,
+                    text: createmsg.text,
+                    chatId: createmsg.chatId,
+                    senderId: sender.id,
+                    senderUsername: sender.username,
+                    recipentUsernames: chat.members,
+                    createdAt: createmsg.createdAt,
+                    tempId: payload.tempId,
+                };
+                for (let i = 0; i < chat.members.length; i++) {
+                    const recipientUsername = chat.members[i]?.username;
+                    const recipientSocketId = onlineUsers.get(recipientUsername);
+                    if (recipientSocketId) {
+                        io.to(recipientSocketId).emit('message', messageData);
+                    }
+                }
+                socket.emit('message_sent', messageData);
+            }
+            catch (e) {
+                console.error(e);
+            }
+        });
+        socket.on('disconnect', () => {
+            console.log('user disconnected');
+            if (clerkUser?.username) {
+                onlineUsers.delete(clerkUser.username);
+            }
+        });
     }
-    socket.on('private_message', async (payload) => {
-        if (!clerkUser)
-            return;
-        payload.fromUsername = clerkUser.username + '';
-        console.log(payload);
-        const existingChat = await findOrCreateChat(payload);
-        const sender = await prisma.user.findFirst({
-            where: {
-                username: payload.fromUsername,
-            },
-        });
-        if (!sender)
-            return new Error('sender not found');
-        const createmsg = await prisma.message.create({
-            data: {
-                text: payload.message,
-                chatId: existingChat.id,
-                senderid: sender.id,
-            },
-        });
-        console.log('online Users', onlineUsers);
-        const messageData = {
-            id: createmsg.id,
-            text: createmsg.text,
-            chatId: createmsg.chatId,
-            senderId: sender.id,
-            senderUsername: sender.username,
-            reciverUsername: payload.toUsername,
-            createdAt: createmsg.createdAt,
-            tempId: payload.tempId,
-        };
-        const recipientSocketId = onlineUsers.get(payload.toUsername);
-        if (recipientSocketId) {
-            io.to(recipientSocketId).emit('message', messageData);
-        }
-        socket.emit('message_sent', messageData);
-    });
-    socket.on('disconnect', () => {
-        console.log('user disconnected');
-        if (clerkUser?.username) {
-            onlineUsers.delete(clerkUser.username);
-        }
-    });
+    catch (e) {
+        console.error(e);
+    }
 });
 server.listen(3000, () => {
     console.log('listening');

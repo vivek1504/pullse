@@ -37,10 +37,10 @@ model Message {
   id   Int    @id @default(autoincrement())
   text String
 
-  senderid Int
+  senderId Int
   chatId   Int
 
-  sender User @relation(fields: [senderid], references: [id])
+  sender User @relation(fields: [senderId], references: [id])
   Chat   Chat @relation(fields: [chatId], references: [id])
 
   createdAt DateTime @default(now())
