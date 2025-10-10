@@ -1,6 +1,5 @@
-import { atom, selector } from 'recoil';
+import { atom } from 'recoil';
 import { type userType, type messageType, type chatType } from './types/types';
-import axios from 'axios';
 
 export const usersAtom = atom<userType[]>({
   key: 'usersAtom',
@@ -12,9 +11,9 @@ export const messagesAtom = atom<messageType[]>({
   default: [],
 });
 
-export const selectedUserAtom = atom<userType>({
+export const selectedUserAtom = atom<userType | null>({
   key: 'selectedUser',
-  default: undefined,
+  default: null,
 });
 
 export const myChatsAtom = atom<chatType[]>({
@@ -22,9 +21,9 @@ export const myChatsAtom = atom<chatType[]>({
   default: [],
 });
 
-export const selectedChatAtom = atom<chatType>({
+export const selectedChatAtom = atom<chatType | null>({
   key: 'selectedChatAtom',
-  default: undefined,
+  default: null,
 });
 // export const myChatsSelector = selector<chatType[]>({
 //   key: 'myChatsSelector',
