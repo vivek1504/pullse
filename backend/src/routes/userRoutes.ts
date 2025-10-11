@@ -126,6 +126,8 @@ userRouter.post('/createGroup', async (req: Request, res: Response) => {
         },
       },
     });
+
+    res.status(200).json({ chat });
   } catch (e) {
     console.error(e);
   }
