@@ -46,11 +46,11 @@ userRouter.get('/allChats', async (req, res) => {
             },
         });
         // Transform messages to match frontend expectations
-        const transformedChats = chats.map(chat => ({
+        const transformedChats = chats.map((chat) => ({
             ...chat,
-            messages: chat.messages.map(message => {
+            messages: chat.messages.map((message) => {
                 // Find receiver username (other member who is not the sender)
-                const receiver = chat.members.find(member => member.id !== message.senderId);
+                const receiver = chat.members.find((member) => member.id !== message.senderId);
                 return {
                     id: message.id.toString(),
                     text: message.text,
@@ -90,6 +90,28 @@ userRouter.get('/search-user/:username', async (req, res) => {
     catch (e) {
         console.error(e);
         res.status(400).json({ msg: 'internal server error' });
+    }
+});
+userRouter.post('/createGroup', async (req, res) => {
+    const { name, members, } = req.body;
+    try {
+        if (!req.userId)
+            return res.json({ msg: 'unauthorized' });
+        const clerkUser = await clerkClient.users.getUser(req.userId);
+        if (!clerkUser.username)
+            return res.json({ msg: 'user not found' });
+        const chat = await prisma.chat.create({
+            data: {
+                isGroup: true,
+                name,
+                members: {
+                    connect: members.map((member) => ({ username: member.username })),
+                },
+            },
+        });
+    }
+    catch (e) {
+        console.error(e);
     }
 });
 export default userRouter;
